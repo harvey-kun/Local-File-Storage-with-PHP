@@ -1,6 +1,54 @@
 <?php
-require "../6.0/config.php";
-require "../6.0/auth.php";
+// Resolve the correct project files regardless of whether this page is served from 6.0 or 6.1.
+$phpDir = __DIR__;
+$configPath = null;
+$authPath = null;
+
+foreach ([
+    $phpDir . "/config.php",
+    $phpDir . "/../6.0/config.php",
+    $phpDir . "/../config.php",
+] as $candidate) {
+    if ($configPath === null && file_exists($candidate)) $configPath = $candidate;
+}
+
+foreach ([
+    $phpDir . "/auth.php",
+    $phpDir . "/../6.0/auth.php",
+    $phpDir . "/../auth.php",
+] as $candidate) {
+    if ($authPath === null && file_exists($candidate)) $authPath = $candidate;
+}
+
+if ($configPath === null || $authPath === null) {
+    http_response_code(500);
+    die("Missing application config or auth files.");
+}
+
+require $configPath;
+require $authPath;
+
+function resolveRedirectTarget(string $target): string {
+    $docRoot = rtrim((string)($_SERVER["DOCUMENT_ROOT"] ?? ""), "/");
+    $scriptDir = rtrim(str_replace("\\", "/", dirname($_SERVER["SCRIPT_NAME"] ?? "/")), "/");
+    $candidates = [];
+
+    if ($scriptDir !== "" && $scriptDir !== "/") {
+        $candidates[] = $scriptDir . "/" . $target;
+        $candidates[] = $scriptDir . "/../6.0/" . $target;
+    }
+    $candidates[] = "/" . ltrim($target, "/");
+    $candidates[] = "/6.0/" . ltrim($target, "/");
+
+    foreach ($candidates as $candidate) {
+        $file = $docRoot . $candidate;
+        if ($docRoot !== "" && file_exists($file)) {
+            return $candidate;
+        }
+    }
+
+    return $target;
+}
 
 ensureSchema($conn);
 authStart(true);
@@ -8,28 +56,28 @@ authStart(true);
 if ($_SERVER["REQUEST_METHOD"] === "POST" && ($_POST["action"] ?? "") === "logout") {
     if (csrfValid()) {
         authLogout();
-        header("Location: login.php");
+        header("Location: " . resolveRedirectTarget("login.php"));
     } else {
         session_write_close();
-        header("Location: index.php");
+        header("Location: " . resolveRedirectTarget("index.php"));
     }
     exit;
 }
 
 if (authCurrentUser($conn)) {
     session_write_close();
-    header("Location: index.php");
+    header("Location: " . resolveRedirectTarget("index.php"));
     exit;
 }
 
 if (empty($_SESSION["csrf"])) $_SESSION["csrf"] = bin2hex(random_bytes(24));
 
-$tab = "login";
+$tab   = "login";
 $error = "";
-$name = "";
+$name  = "";
 
 if ($_SERVER["REQUEST_METHOD"] === "POST") {
-    $tab = ($_POST["action"] ?? "") === "register" ? "register" : "login";
+    $tab  = ($_POST["action"] ?? "") === "register" ? "register" : "login";
     $name = trim((string)($_POST["username"] ?? ""));
     $pass = (string)($_POST["password"] ?? "");
 
@@ -42,7 +90,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
         if ($user && authCheckPassword($conn, $user, $pass, true)) {
             authClearAttempts($conn, $user["username"]);
             authLogin($user);
-            header("Location: index.php");
+            header("Location: " . resolveRedirectTarget("index.php"));
             exit;
         }
         if (!$user) password_hash($pass, PASSWORD_DEFAULT);
@@ -67,7 +115,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                 if ($user) {
                     authRecordAttempt($conn, $name, "new");
                     authLogin($user);
-                    header("Location: index.php");
+                    header("Location: " . resolveRedirectTarget("index.php"));
                     exit;
                 }
                 $err = "Could not create the account.";
